@@ -13,6 +13,19 @@ fn log_request(req: &Request) {
     );
 }
 
+fn add_headers(res: std::result::Result<worker::Response, worker::Error>) -> std::result::Result<worker::Response, worker::Error> {
+    return match res {
+        Ok(mut res) => {
+            let headers = res.headers_mut();
+            if let Err(_) = headers.set("Access-Control-Allow-Origin", "*") {
+                console_log!("error setting response headers");
+            }
+            Ok(res)
+        },
+        Err(res) => Err(res),
+    };
+}
+
 async fn get_value(mut req: Request, ctx: RouteContext<()>) -> std::result::Result<worker::Response, worker::Error> {
     let data: serde_json::Value = match req.json().await {
         Ok(d) => d,
@@ -64,42 +77,47 @@ async fn add_value(mut req: Request, ctx: RouteContext<()>) -> std::result::Resu
 
 #[event(fetch)]
 pub async fn main(req: Request, env: Env, _ctx: worker::Context) -> Result<Response> {
+    let _allowed_origins = vec![
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "https://localhost:3000",
+        "https://localhost:3001",
+    ];
+ 
     log_request(&req);
     utils::set_panic_hook();
 
-    // do middlware stuff here, then if the request is valid we can pass it to the router
-    let req_is_valid: bool = true;
-    if !req_is_valid {
-        return Response::error("Invalid Request", 400);
-    }
+    let headers = req.headers();
+    console_log!("HEADERS {:?}", headers);
+
+    // middleware-esque things
+    // crashes the worker when failed (insomnia)
+    // if let Ok(o) = req.headers().get("origin") {
+        // let origin = o.unwrap();
+        // if !allowed_origins.contains(&origin.as_str()) {
+            // return add_headers(Response::error("invalid origin", 400));
+        // }
+    // } else {
+        // return add_headers(Response::error("invalid origin", 400));
+    // }
 
     let router = Router::new();
     router
         .get("/", |_, _| Response::ok("Hello from Workers!"))
-        .get_async("/hello", |mut req, _ctx| async move {
-            let data: serde_json::Value = match req.json().await {
-                Ok(d) => d,
-                Err(_) => {
-                    return Response::error("Bad Request: No json", 400);
-                }
-            };
-            let name = match data.get("name") {
-                Some(n) => n,
-                None => {
-                    return Response::error("Bad Request: Missing name", 400);
-                },
-            };
-            return Response::from_json(&json!({ "message": format!("hello, {}!", name) }));
-        })
         .get("/worker-version", |_, ctx| {
             let version = ctx.var("WORKERS_RS_VERSION")?.to_string();
-            Response::ok(version)
+            add_headers(Response::ok(version))
         })
         .post_async("/add", |req, ctx| async move {
-            return add_value(req, ctx).await;
+            return add_headers(add_value(req, ctx).await);
         })
-        .get_async("/get", |req, ctx| async move {
-            return get_value(req, ctx).await;
+        .post_async("/get", |req, ctx| async move {
+            return add_headers(get_value(req, ctx).await);
+        })
+        .get("/names", |_req, _ctx| {
+            return add_headers(Response::from_json(&json!({
+                "names": [{"first": "John", "last": "Doe"}, {"first": "Jane", "last": "Smith"}]
+            })));
         })
         .run(req, env)
         .await
